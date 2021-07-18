@@ -1,0 +1,179 @@
+const express = require('express');
+const router = express.Router();
+const Drive = require('../../models/Drive')
+const Student = require('../../models/student')
+const { check, validationResult } = require('express-validator')
+const auth = require('../../middleware/auth')
+const nodemailer = require('nodemailer')
+const { google } = require('googleapis')
+const config = require('config')
+
+
+// @route POST api/drive/new-drive
+// @desc create a new Drive
+// @access private
+router.post('/new-drive', [auth, [
+    check('companyName', 'Company is required').not().isEmpty(),
+    check('branch', 'Branch is required').not().isEmpty(),
+    check('course', 'Course is required').not().isEmpty()]
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        res.status(400).json({ err: errors.array() })
+    }
+    const {
+        companyName,
+        dateOfDrive,
+        packages,
+        branch,
+        course,
+        desc,
+        ssc,
+        hsc,
+        diploma,
+        graduation,
+        belowPackage,
+        placedIn
+    } = req.body
+    let driveFields = {};
+    driveFields.admin = req.user.id;
+    if (companyName) driveFields.companyName = companyName;
+    if (packages) driveFields.package = packages;
+    if (branch) driveFields.branch = branch;
+    if (course) driveFields.course = course;
+    if (desc) driveFields.desc = desc;
+    if (dateOfDrive) driveFields.dateOfDrive = dateOfDrive;
+    driveFields.eligibility = {};
+    if (ssc) driveFields.eligibility.ssc = ssc;
+    if (hsc) driveFields.eligibility.hsc = hsc;
+    if (diploma) driveFields.eligibility.diploma = diploma;
+    if (graduation) driveFields.eligibility.graduation = graduation;
+    driveFields.notEligible = {};
+    if (belowPackage) driveFields.notEligible.belowPackage = belowPackage;
+    if (placedIn) driveFields.notEligible.placedIn = placedIn;
+    try {
+        let drive = new Drive(driveFields);
+        await drive.save();
+        res.json(drive);
+    } catch (error) {
+        console.log(error.message);
+        res.status(500).send("Server Error");
+    }
+    const CLIENT_ID = config.get('CLIENT_ID')
+    const CLIENT_SECRET = config.get('CLIENT_SECRET')
+    const REDIRECT_URI = config.get('REDIRECT_URI')
+    const REFRESH_TOKEN = config.get('REFRESH_TOKEN')
+    const oAuth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+    oAuth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
+    try {
+        const accessToken = await oAuth2Client.getAccessToken();
+        const transport = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                type: 'OAuth2',
+                user: 'aryannigam18@gmail.com',
+                clientId: CLIENT_ID,
+                clientSecret: CLIENT_SECRET,
+                refreshToken: REFRESH_TOKEN,
+                accessToken: accessToken
+            }
+        })
+        const outputBody = `
+        <h1>New Drive Announcemt</h1>
+        <h3>Drive details</h3>
+        <hr/>
+        <ul>
+            <li>Company: ${companyName}</li>
+            <li>Package: ${package}</li>
+            <li>Branches: ${branch}</li>
+            <li>Description: ${desc}</li>
+        </ul>
+        `
+        const mailOptions = {
+            from: 'Aryan <aryannigam18@gmail.com>',
+            to: 'aryannigamofficial@gmail.com, anamika.atiwari01@gmail.com, pandeykaushik0310@gmail.com',
+            subject: 'New Drive Announcement',
+            text: outputBody,
+            html: outputBody
+        }
+        const result = await transport.sendMail(mailOptions);
+        res.json(result)
+
+    } catch (error) {
+        console.log("Mail " + error.message)
+    }
+})
+
+// @route GET api/drive/
+// @desc Get all Drives
+// @access private
+router.get('/', auth, async (req, res) => {
+    try {
+        const drives = await Drive.find();
+        res.json(drives)
+
+    } catch (error) {
+        console.log(error.message);
+        res.status(500).send('Server Error')
+    }
+})
+
+
+// @route Get api/drive/:id
+// @desc get drive by id
+// @access private
+router.get('/:id', auth, async (req, res) => {
+    try {
+        let drive = await Drive.findById(req.params.id)
+        res.json(drive)
+    } catch (error) {
+        console.error(error.message)
+        res.status(500).send('Server Error')
+    }
+
+})
+// @route POST api/drive/drive-placed-student/
+// @desc Add placed student enroll in particular drive
+// @access private
+router.post('/drive-placed-student/', [auth,
+    check('enrollmentNo', 'Enrollment is required seperated by ', ' ').not().isEmpty()
+], async (req, res) => {
+    // const drive = await Drive.findById(req.params.id);
+    const error = validationResult(req);
+    if (!error.isEmpty()) {
+        res.status(400).json({ err: error.array() })
+    }
+    const { id, enrollmentNo } = req.body;
+    let number = null
+    if (enrollmentNo) number = enrollmentNo.split(',').map(number => number.trim())
+    number.forEach(async element => {
+        try {
+            const studentRecord = await Student.find({ Enrollment_No: element });
+            let studentPlacedIn = studentRecord[0].placedIn;
+            studentPlacedIn.push(id);
+            const student = await Student.findOneAndUpdate(
+                { Enrollment_No: element },
+                { $set: { "placedIn": studentPlacedIn, isPlaced: true } },
+                { new: true }
+            )
+            res.send("Placed students record updated")
+        } catch (error) {
+            res.status(401).send("Enrollment not found");
+            console.error(error.message);
+        }
+    });
+})
+// @route DElete api/drive/:id
+// @desc Delete drive by id
+// @access private
+router.post('/delete', auth, async (req, res) => {
+    const { id } = req.body;
+    try {
+        await Drive.findByIdAndRemove(id)
+        res.send('Drive deleted')
+    } catch (error) {
+        console.log(error.message)
+        res.status(500).send('Server Error');
+    }
+})
+module.exports = router;
